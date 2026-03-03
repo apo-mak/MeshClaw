@@ -291,25 +291,78 @@ export const meshtasticPlugin: ChannelPlugin<ResolvedMeshtasticAccount, Meshtast
       lastProbeAt: snapshot.lastProbeAt ?? null,
     }),
     probeAccount: async ({ account }) => {
-      // Meshtastic probing is transport-dependent and may require
-      // active device connection. Return a basic status.
       if (!account.configured) {
         return {
           ok: false,
-          error: "not configured",
+          error: "Not configured. Run 'openclaw setup' to configure.",
           transport: account.transport,
         } as MeshtasticProbe;
       }
-      return {
-        ok: true,
-        transport: account.transport,
-        address:
-          account.transport === "serial"
-            ? account.serialPort
-            : account.transport === "http"
-              ? account.httpAddress
-              : account.config.mqtt?.broker,
-      } as MeshtasticProbe;
+
+      const address =
+        account.transport === "serial"
+          ? account.serialPort
+          : account.transport === "http"
+            ? account.httpAddress
+            : account.config.mqtt?.broker;
+
+      // Lightweight transport-specific reachability check.
+      try {
+        if (account.transport === "serial") {
+          const { access } = await import("node:fs/promises");
+          await access(account.serialPort);
+        } else if (account.transport === "http") {
+          const prefix = account.httpTls ? "https" : "http";
+          const url = `${prefix}://${account.httpAddress}/api/v1/fromradio`;
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 5_000);
+          try {
+            await fetch(url, { signal: controller.signal });
+          } finally {
+            clearTimeout(timeout);
+          }
+        } else if (account.transport === "mqtt") {
+          const mqtt = await import("mqtt");
+          const mqttConfig = account.config.mqtt;
+          const protocol = mqttConfig?.tls ? "mqtts" : "mqtt";
+          const broker = mqttConfig?.broker ?? "mqtt.meshtastic.org";
+          const port = mqttConfig?.port ?? 1883;
+          await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+              client.end(true);
+              reject(new Error("MQTT connection timed out (5s)"));
+            }, 5_000);
+            const client = mqtt.default.connect(`${protocol}://${broker}:${port}`, {
+              username: mqttConfig?.username ?? "meshdev",
+              password: mqttConfig?.password ?? "large4cats",
+              clean: true,
+              connectTimeout: 5_000,
+            });
+            client.on("connect", () => {
+              clearTimeout(timeout);
+              client.end(true);
+              resolve();
+            });
+            client.on("error", (err) => {
+              clearTimeout(timeout);
+              client.end(true);
+              reject(err);
+            });
+          });
+        }
+        return {
+          ok: true,
+          transport: account.transport,
+          address,
+        } as MeshtasticProbe;
+      } catch (err) {
+        return {
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+          transport: account.transport,
+          address,
+        } as MeshtasticProbe;
+      }
     },
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
       ...buildBaseAccountStatusSnapshot({ account, runtime, probe }),
@@ -324,7 +377,7 @@ export const meshtasticPlugin: ChannelPlugin<ResolvedMeshtasticAccount, Meshtast
       if (!account.configured) {
         throw new Error(
           `Meshtastic is not configured for account "${account.accountId}". ` +
-            `Set channels.meshtastic.transport and connection details.`,
+            `Run 'openclaw setup' or set channels.meshtastic.transport and connection details in config.`,
         );
       }
       const transportDesc =

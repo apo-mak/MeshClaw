@@ -1,3 +1,4 @@
+import { readdir } from "node:fs/promises";
 import {
   addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
@@ -23,6 +24,33 @@ import type {
 } from "./types.js";
 
 const channel = "meshtastic" as const;
+
+async function detectMeshtasticSerialPortCandidates(): Promise<string[]> {
+  const candidates = new Set<string>();
+
+  try {
+    const devEntries = await readdir("/dev");
+    for (const entry of devEntries) {
+      if (
+        entry.startsWith("cu.usb")
+        || entry.startsWith("tty.usb")
+        || entry.startsWith("ttyUSB")
+        || entry.startsWith("ttyACM")
+      ) {
+        candidates.add(`/dev/${entry}`);
+      }
+    }
+  } catch {}
+
+  try {
+    const byIdEntries = await readdir("/dev/serial/by-id");
+    for (const entry of byIdEntries) {
+      candidates.add(`/dev/serial/by-id/${entry}`);
+    }
+  } catch {}
+
+  return [...candidates].sort((a, b) => a.localeCompare(b));
+}
 
 const REGION_OPTIONS: { value: string; label: string }[] = [
   { value: "US", label: "US (902-928 MHz)" },
@@ -251,14 +279,39 @@ export const meshtasticOnboardingAdapter: ChannelOnboardingAdapter = {
     const transport = String(transportChoice) as MeshtasticTransport;
 
     if (transport === "serial") {
-      const serialPort = String(
-        await prompter.text({
-          message: "Serial port path",
-          placeholder: "/dev/ttyUSB0 or /dev/tty.usbmodem*",
-          initialValue: resolved.serialPort || undefined,
-          validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
-        }),
-      ).trim();
+      const serialCandidates = await detectMeshtasticSerialPortCandidates();
+      let serialPort = resolved.serialPort || "";
+      let needsManualSerialInput = true;
+
+      if (serialCandidates.length > 0) {
+        const initialDetected = serialCandidates.includes(serialPort)
+          ? serialPort
+          : serialCandidates[0];
+        const detectedChoice = await prompter.select({
+          message: "Detected serial port",
+          options: [
+            ...serialCandidates.map((value) => ({ value, label: value })),
+            { value: "__manual__", label: "Manual input" },
+          ],
+          initialValue: initialDetected,
+        });
+        const selected = String(detectedChoice);
+        if (selected !== "__manual__") {
+          serialPort = selected;
+          needsManualSerialInput = false;
+        }
+      }
+
+      if (needsManualSerialInput) {
+        serialPort = String(
+          await prompter.text({
+            message: "Serial port path",
+            placeholder: "/dev/ttyUSB0 or /dev/tty.usbmodem*",
+            initialValue: serialPort || undefined,
+            validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
+          }),
+        ).trim();
+      }
 
       next = updateMeshtasticAccountConfig(next, accountId, {
         enabled: true,

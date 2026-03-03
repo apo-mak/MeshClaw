@@ -2,6 +2,16 @@ import mqtt from "mqtt";
 import { nodeNumToHex } from "./normalize.js";
 import type { MeshtasticMqttConfig } from "./types.js";
 
+/** Derive a publish topic from a subscribe topic.
+ *  Standard pattern: "msh/REGION/NUM/json/#" → "msh/REGION/NUM/json/mqtt".
+ *  If the topic has no wildcard suffix, appends "/mqtt" as the publish leaf. */
+function derivePublishTopic(subscribeTopic: string): string {
+  if (subscribeTopic.endsWith("/#")) {
+    return subscribeTopic.slice(0, -2) + "/mqtt";
+  }
+  return subscribeTopic + "/mqtt";
+}
+
 export type MeshtasticMqttTextEvent = {
   senderNodeId: string;
   senderName?: string;
@@ -50,9 +60,16 @@ export async function connectMeshtasticMqtt(
   const username = mqttConfig.username ?? "meshdev";
   const password = mqttConfig.password ?? "large4cats";
   const topic = mqttConfig.topic ?? "msh/US/2/json/#";
-  const publishTopic = mqttConfig.publishTopic ?? topic.replace("/#", "/mqtt");
+  const publishTopic = mqttConfig.publishTopic ?? derivePublishTopic(topic);
   const protocol = mqttConfig.tls ? "mqtts" : "mqtt";
-  const myNodeId = options.myNodeId?.toLowerCase();
+  const myNodeId = (mqttConfig.myNodeId ?? options.myNodeId)?.toLowerCase();
+
+  if (!myNodeId) {
+    options.onStatus?.(
+      "warning: myNodeId not set — all messages will be treated as group. " +
+        "Set channels.meshtastic.mqtt.myNodeId for DM support.",
+    );
+  }
 
   const client = mqtt.connect(`${protocol}://${broker}:${port}`, {
     username,
@@ -111,13 +128,19 @@ export async function connectMeshtasticMqtt(
     }
 
     // Determine DM vs broadcast.
-    // MQTT JSON doesn't clearly distinguish DM; if `to` is a specific node and matches our ID, it's direct.
-    const isDirect = myNodeId
-      ? msg.to !== undefined && nodeNumToHex(msg.to).toLowerCase() === myNodeId
-      : false;
+    // MQTT JSON: if `to` matches our node ID, it's a direct message.
+    const isDirect = myNodeId !== undefined
+      && msg.to !== undefined
+      && msg.to !== 0xffffffff
+      && nodeNumToHex(msg.to).toLowerCase() === myNodeId;
+
+    const senderName = msg.sender && msg.sender !== senderNodeId
+      ? msg.sender
+      : undefined;
 
     const event: MeshtasticMqttTextEvent = {
       senderNodeId: senderNodeId.startsWith("!") ? senderNodeId : `!${senderNodeId}`,
+      senderName,
       text: msg.payload.text,
       channelIndex: msg.channel ?? 0,
       channelName: msg.channel_name,
@@ -152,6 +175,7 @@ export async function connectMeshtasticMqtt(
         type: "sendtext",
         payload: { text },
         ...(destination ? { to: Number.parseInt(destination.replace("!", ""), 16) } : {}),
+        ...(channelName ? { channel_name: channelName } : {}),
       };
       client.publish(outboundTopic, JSON.stringify(message));
     },

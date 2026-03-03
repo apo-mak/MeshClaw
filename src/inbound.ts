@@ -51,6 +51,78 @@ function resolveMeshtasticEffectiveAllowlists(params: {
 // so the firmware doesn't silently truncate them.
 const MESHTASTIC_CHUNK_LIMIT = 200;
 
+async function readMeshtasticPairingAllowFromStore(params: {
+  readAllowFromStore: (...args: unknown[]) => Promise<unknown>;
+  accountId: string;
+  log?: (line: string) => void;
+}): Promise<string[]> {
+  const callPatterns: unknown[][] = [
+    [CHANNEL_ID, params.accountId],
+    [CHANNEL_ID],
+  ];
+
+  for (const args of callPatterns) {
+    try {
+      const result = await params.readAllowFromStore(...args);
+      if (Array.isArray(result)) {
+        return result.map((entry) => String(entry));
+      }
+    } catch (error) {
+      params.log?.(
+        `meshtastic: pairing allowFrom read failed for args=${JSON.stringify(args)}: ${String(error)}`,
+      );
+    }
+  }
+
+  return [];
+}
+
+async function upsertMeshtasticPairingRequest(params: {
+  upsertPairingRequest: (...args: unknown[]) => Promise<unknown>;
+  accountId: string;
+  senderNodeId: string;
+  senderName?: string;
+  log?: (line: string) => void;
+}): Promise<{ code: string; created: boolean }> {
+  const request = {
+    channel: CHANNEL_ID,
+    id: params.senderNodeId,
+    meta: {
+      name: params.senderName || undefined,
+      accountId: params.accountId,
+    },
+  };
+
+  const callPatterns: unknown[][] = [
+    [request, params.accountId],
+    [request],
+  ];
+
+  for (const args of callPatterns) {
+    try {
+      const result = await params.upsertPairingRequest(...args);
+      if (
+        typeof result === "object"
+        && result !== null
+        && "code" in result
+        && "created" in result
+      ) {
+        const code = String((result as { code: unknown }).code ?? "");
+        const created = Boolean((result as { created: unknown }).created);
+        if (code) {
+          return { code, created };
+        }
+      }
+    } catch (error) {
+      params.log?.(
+        `meshtastic: pairing request upsert failed for args=${JSON.stringify(args)}: ${String(error)}`,
+      );
+    }
+  }
+
+  throw new Error("Failed to create Meshtastic pairing request");
+}
+
 function chunkText(text: string, limit: number): string[] {
   if (text.length <= limit) return [text];
   const chunks: string[] = [];
@@ -150,7 +222,13 @@ export async function handleMeshtasticInbound(params: {
   const storeAllowFrom =
     dmPolicy === "allowlist"
       ? []
-      : await core.channel.pairing.readAllowFromStore(CHANNEL_ID).catch(() => []);
+      : await readMeshtasticPairingAllowFromStore({
+          readAllowFromStore: core.channel.pairing.readAllowFromStore as (
+            ...args: unknown[]
+          ) => Promise<unknown>,
+          accountId: account.accountId,
+          log: (line) => runtime.log?.(line),
+        });
   const storeAllowList = normalizeMeshtasticAllowlist(storeAllowFrom);
 
   const channelLabel = message.channelName ?? `channel-${message.channelIndex}`;
@@ -225,10 +303,14 @@ export async function handleMeshtasticInbound(params: {
       if (!dmAllowed) {
         if (dmPolicy === "pairing") {
           const normalizedId = normalizeMeshtasticNodeId(message.senderNodeId);
-          const { code, created } = await core.channel.pairing.upsertPairingRequest({
-            channel: CHANNEL_ID,
-            id: normalizedId,
-            meta: { name: message.senderName || undefined },
+          const { code, created } = await upsertMeshtasticPairingRequest({
+            upsertPairingRequest: core.channel.pairing.upsertPairingRequest as (
+              ...args: unknown[]
+            ) => Promise<unknown>,
+            accountId: account.accountId,
+            senderNodeId: normalizedId,
+            senderName: message.senderName,
+            log: (line) => runtime.log?.(line),
           });
           if (created) {
             try {

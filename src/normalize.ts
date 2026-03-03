@@ -28,13 +28,16 @@ export function normalizeMeshtasticNodeId(raw: string): string {
     }
     return trimmed;
   }
+  // Bare hex string (contains at least one a-f character to disambiguate from decimal).
+  if (/^[0-9a-f]{1,8}$/i.test(trimmed) && !/^\d+$/.test(trimmed)) {
+    return `!${trimmed.padStart(8, "0")}`;
+  }
   const num = Number.parseInt(trimmed, 10);
   if (Number.isFinite(num) && num >= 0) {
     return nodeNumToHex(num);
   }
   return trimmed;
 }
-
 /** Check if a string looks like a Meshtastic node ID (!hex or numeric). */
 export function looksLikeMeshtasticNodeId(raw: string): boolean {
   const trimmed = raw.trim();
@@ -44,10 +47,13 @@ export function looksLikeMeshtasticNodeId(raw: string): boolean {
   if (trimmed.startsWith("!") && /^![0-9a-f]{1,8}$/i.test(trimmed)) {
     return true;
   }
+  // Bare hex string (contains at least one a-f to disambiguate from decimal).
+  if (/^[0-9a-f]{1,8}$/i.test(trimmed) && !/^\d+$/.test(trimmed)) {
+    return true;
+  }
   const num = Number.parseInt(trimmed, 10);
   return Number.isFinite(num) && num >= 0 && String(num) === trimmed;
 }
-
 /** Normalize a messaging target. Strips "meshtastic:" prefix, resolves channel: prefix. */
 export function normalizeMeshtasticMessagingTarget(raw: string): string | undefined {
   const trimmed = raw.trim();

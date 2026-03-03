@@ -50,13 +50,15 @@ export async function sendMessageMeshtastic(
   if (!account.configured) {
     throw new Error(
       `Meshtastic is not configured for account "${account.accountId}". ` +
-        `Set channels.meshtastic.transport and connection details.`,
+        `Run 'openclaw setup' or set channels.meshtastic.transport and connection details in config.`,
     );
   }
 
   const target = normalizeMeshtasticMessagingTarget(to);
   if (!target) {
-    throw new Error(`Invalid Meshtastic target: ${to}`);
+    throw new Error(
+      `Invalid Meshtastic target: "${to}". Use a node ID like "!aabbccdd" or a channel name like "channel:LongFast".`,
+    );
   }
 
   const tableMode = runtime.channel.text.resolveMarkdownTableMode({
@@ -75,7 +77,7 @@ export async function sendMessageMeshtastic(
     if (activeMqttSend) {
       await activeMqttSend(prepared, target, opts.channelName);
     } else {
-      throw new Error("No active MQTT connection. Start the gateway first.");
+      throw new Error("No active MQTT connection. Run 'openclaw gateway start' to connect.");
     }
   } else {
     // Serial or HTTP: use active transport if available.
@@ -83,7 +85,7 @@ export async function sendMessageMeshtastic(
       const destination = target.startsWith("!") ? hexToNodeNum(target) : undefined;
       await activeSerialSend(prepared, destination, opts.channelIndex);
     } else {
-      throw new Error(`No active ${transport} connection. Start the gateway first.`);
+      throw new Error(`No active ${transport} connection. Run 'openclaw gateway start' to connect.`);
     }
   }
 

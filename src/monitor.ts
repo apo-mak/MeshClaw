@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createLoggerBackedRuntime, type RuntimeEnv } from "openclaw/plugin-sdk";
 import { resolveMeshtasticAccount } from "./accounts.js";
-import { connectMeshtasticClient, SetOwnerRebootError, type MeshtasticClient } from "./client.js";
+import { connectMeshtasticClient, DeviceStatus, SetOwnerRebootError, type MeshtasticClient } from "./client.js";
 import { handleMeshtasticInbound } from "./inbound.js";
 import { connectMeshtasticMqtt, type MeshtasticMqttClient } from "./mqtt-client.js";
 import { nodeNumToHex } from "./normalize.js";
@@ -59,7 +59,7 @@ export async function monitorMeshtasticProvider(
   if (!account.configured) {
     throw new Error(
       `Meshtastic is not configured for account "${account.accountId}". ` +
-        `Set channels.meshtastic.transport and connection details.`,
+        `Run 'openclaw setup' or set channels.meshtastic.transport and connection details in config.`,
     );
   }
 
@@ -150,7 +150,9 @@ async function monitorDevice(params: {
               // Broadcast: fire-and-forget.  The SDK's sendText promise waits
               // for internal queue confirmation which may time out for broadcasts.
               // The radio sends the packet regardless, so we don't await.
-              client.sendText(text, undefined, false, message.channelIndex).catch(() => {});
+              client.sendText(text, undefined, false, message.channelIndex).catch((err) => {
+                logger.warn(`[${account.accountId}] broadcast send failed: ${err instanceof Error ? err.message : String(err)}`);
+              });
             } else {
               // DM: fire-and-forget.  The SDK's sendText awaits ACK from the
               // target node; if ACK times out the promise rejects, but the radio
@@ -158,7 +160,9 @@ async function monitorDevice(params: {
               // subsequent reply chunks.
               const { hexToNodeNum } = await import("./normalize.js");
               const destNum = hexToNodeNum(target);
-              client.sendText(text, destNum, true).catch(() => {});
+              client.sendText(text, destNum, true).catch((err) => {
+                logger.warn(`[${account.accountId}] DM send failed to ${target}: ${err instanceof Error ? err.message : String(err)}`);
+              });
             }
             opts.statusSink?.({ lastOutboundAt: Date.now() });
             core.channel.activity.record({
@@ -175,6 +179,7 @@ async function monitorDevice(params: {
     if (err instanceof SetOwnerRebootError) {
       logger.info(`[${account.accountId}] ${err.message}`);
       // Wait for the device to finish rebooting before the framework retries.
+      logger.info(`[${account.accountId}] waiting 30s for device reboot...`);
       await new Promise((r) => setTimeout(r, 30_000));
     }
     throw err;
@@ -210,7 +215,7 @@ async function monitorDevice(params: {
       opts.abortSignal.addEventListener("abort", () => resolve(), { once: true });
     }
     client!.device.events.onDeviceStatus.subscribe((status: number) => {
-      if (status === 2 /* DeviceDisconnected */) {
+      if (status === DeviceStatus.Disconnected) {
         logger.info(`[${account.accountId}] device disconnected, exiting monitor`);
         resolve();
       }
@@ -224,6 +229,7 @@ async function monitorDevice(params: {
 
   // Give the OS time to release the serial port lock before the framework
   // restarts the channel (which would immediately try to reopen it).
+  logger.info(`[${account.accountId}] releasing serial port (3s delay)...`);
   await new Promise<void>((r) => setTimeout(r, 3_000));
 
   return { stop: () => {} };
@@ -241,7 +247,7 @@ async function monitorMqtt(params: {
   const mqttConfig = account.config.mqtt;
 
   if (!mqttConfig?.broker) {
-    throw new Error("MQTT broker not configured");
+    throw new Error("MQTT broker not configured. Set channels.meshtastic.mqtt.broker or run 'openclaw setup'.");
   }
 
   let mqttClient: MeshtasticMqttClient | null = null;

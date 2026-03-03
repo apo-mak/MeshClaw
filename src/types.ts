@@ -28,6 +28,8 @@ export type MeshtasticMqttConfig = {
   topic?: string;
   publishTopic?: string;
   tls?: boolean;
+  /** Own node ID in !hex format — required for DM detection over MQTT. */
+  myNodeId?: string;
 };
 
 export type MeshtasticTransport = "serial" | "http" | "mqtt";

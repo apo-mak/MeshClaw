@@ -3,6 +3,20 @@ import { nodeNumToHex } from "./normalize.js";
 import type { MeshtasticRegion } from "./types.js";
 
 /**
+ * Device status codes from @meshtastic/core DeviceStatusEnum.
+ * The SDK doesn't export these as named constants, so we define them here.
+ */
+export const DeviceStatus = {
+  Restarting: 1,
+  Disconnected: 2,
+  Connecting: 3,
+  Reconnecting: 4,
+  Connected: 5,
+  Configuring: 6,
+  Configured: 7,
+} as const;
+
+/**
  * Thrown when setOwner() was called to update the device name.
  * The device will reboot to persist the change; the caller should
  * reconnect after a delay (~30 s).
@@ -170,13 +184,13 @@ export async function connectMeshtasticClient(
 
   device.events.onDeviceStatus.subscribe((status: number) => {
     const label: Record<number, string> = {
-      1: "Restarting",
-      2: "Disconnected",
-      3: "Connecting",
-      4: "Reconnecting",
-      5: "Connected",
-      6: "Configuring",
-      7: "Configured",
+      [DeviceStatus.Restarting]: "Restarting",
+      [DeviceStatus.Disconnected]: "Disconnected",
+      [DeviceStatus.Connecting]: "Connecting",
+      [DeviceStatus.Reconnecting]: "Reconnecting",
+      [DeviceStatus.Connected]: "Connected",
+      [DeviceStatus.Configuring]: "Configuring",
+      [DeviceStatus.Configured]: "Configured",
     };
     options.onStatus?.(`status=${status} (${label[status] ?? "unknown"})`);
   });
@@ -249,27 +263,31 @@ export async function connectMeshtasticClient(
     };
     const timeout = setTimeout(() => {
       cleanup();
-      reject(new Error("device configure timed out (45 s)"));
+      reject(new Error(
+        "Device configure timed out (45s). Check USB connection, try a different port, or power-cycle the device.",
+      ));
     }, 45_000);
     device.events.onDeviceStatus.subscribe((status: number) => {
-      if (status === 7 /* DeviceConfigured */) {
+      if (status === DeviceStatus.Configured) {
         cleanup();
         resolve();
-      } else if (status === 5 /* DeviceConnected */ && !configureRetried) {
+      } else if (status === DeviceStatus.Connected && !configureRetried) {
         // Transport is now connected — re-send the config request after a
         // short delay so the serial pipe is fully established.
         configureRetried = true;
         setTimeout(() => device.configure().catch(() => {}), 500);
-      } else if (status === 2 /* DeviceDisconnected */) {
+      } else if (status === DeviceStatus.Disconnected) {
         cleanup();
-        reject(new Error("device disconnected during configure"));
+        reject(new Error(
+          "Device disconnected during configure. Check cable connection and ensure no other program is using the serial port.",
+        ));
       }
     });
     // Poll as fallback — ste-core dispatch can miss late subscribers.
     poll = setInterval(() => {
       if (
         (device as unknown as { isConfigured: boolean }).isConfigured ||
-        (device as unknown as { deviceStatus: number }).deviceStatus === 7
+        (device as unknown as { deviceStatus: number }).deviceStatus === DeviceStatus.Configured
       ) {
         cleanup();
         resolve();
@@ -319,6 +337,7 @@ export async function connectMeshtasticClient(
       }
       // Allow the firmware time to receive and process the admin packet
       // before we tear down the serial connection.
+      options.onStatus?.("waiting 2s for firmware to process name change...");
       await new Promise((r) => setTimeout(r, 2_000));
       safeDisconnect();
       throw new SetOwnerRebootError(desiredName, currentName);

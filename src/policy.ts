@@ -137,11 +137,15 @@ export function resolveMeshtasticGroupSenderAllowed(params: {
   const inner = normalizeMeshtasticAllowlist(params.innerAllowFrom);
   const outer = normalizeMeshtasticAllowlist(params.outerAllowFrom);
 
+  // Fallback strategy: check channel-specific allowlist first, then fall
+  // back to the global allowlist.  This ensures global admin nodes are
+  // never locked out of channels that define their own lists.
   if (inner.length > 0) {
-    return resolveMeshtasticAllowlistMatch({
+    const innerResult = resolveMeshtasticAllowlistMatch({
       allowFrom: inner,
       message: params.message,
-    }).allowed;
+    });
+    if (innerResult.allowed) return true;
   }
   if (outer.length > 0) {
     return resolveMeshtasticAllowlistMatch({
