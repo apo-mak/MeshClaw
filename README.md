@@ -45,7 +45,6 @@
 - [Limitations](#limitations)
 - [Development](#development)
 - [Contributing](#contributing)
-- [License](#license)
 
 ## Features
 
@@ -296,10 +295,6 @@ No build step is required. OpenClaw loads TypeScript source directly from `index
 - Open issues and feature requests via [GitHub Issues][issues]
 - Pull requests are welcome
 - Keep changes aligned with existing TypeScript conventions
-
-## License
-
-MIT
 
 <!-- Reference-style links -->
 [docs]: https://meshtastic.org/docs/
