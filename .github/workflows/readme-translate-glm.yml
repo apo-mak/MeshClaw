@@ -19,6 +19,14 @@ jobs:
   translate:
     if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        lang: [zh-CN, ja]
+        include:
+          - lang: zh-CN
+            target: README.zh-CN.md
+          - lang: ja
+            target: README.ja.md
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -30,20 +38,21 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Translate README.md -> README.zh-CN.md
+      - name: Translate README.md -> ${{ matrix.target }}
         env:
           GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
           GLM_MODEL: ${{ vars.GLM_MODEL || 'glm-4-flash' }}
-        run: python .github/scripts/translate_readme_glm.py
+        run: python .github/scripts/translate_readme_glm.py --lang ${{ matrix.lang }}
 
       - name: Commit translated README if changed
         run: |
-          if git diff --quiet -- README.zh-CN.md; then
-            echo "No translation changes detected."
+          if git diff --quiet -- ${{ matrix.target }}; then
+            echo "No translation changes detected for ${{ matrix.target }}."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.zh-CN.md
-          git commit -m "docs: auto-translate README.zh-CN from README.md"
+          git pull --rebase
+          git add ${{ matrix.target }}
+          git commit -m "docs: auto-translate ${{ matrix.target }} from README.md"
           git push
