@@ -1,7 +1,7 @@
 {
   "name": "@seeed-studio/meshtastic",
   "version": "0.2.0",
-  "description": "OpenClaw Meshtastic LoRa mesh channel plugin",
+  "description": "MeshClaw — OpenClaw channel plugin for Meshtastic LoRa mesh networks",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -9,6 +9,7 @@
     "url": "https://github.com/Seeed-Solution/openclaw-meshtastic"
   },
   "keywords": [
+    "meshclaw",
     "openclaw",
     "meshtastic",
     "lora",

@@ -1,0 +1,45 @@
+name: Translate README (GLM)
+
+on:
+  push:
+    branches:
+      - "**"
+    paths:
+      - "README.md"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  translate:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@42375524f8a8ce66d36d26ea2e38c56e3e5f5d82
+        with:
+          python-version: "3.12"
+
+      - name: Translate README.md -> README.zh-CN.md
+        env:
+          GLM_API_KEY: ${{ secrets.GLM_API_KEY }}
+          GLM_MODEL: ${{ vars.GLM_MODEL || 'glm-4-flash' }}
+        run: python .github/scripts/translate_readme_glm.py
+
+      - name: Commit translated README if changed
+        run: |
+          if git diff --quiet -- README.zh-CN.md; then
+            echo "No translation changes detected."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.zh-CN.md
+          git commit -m "docs: auto-translate README.zh-CN from README.md"
+          git push
