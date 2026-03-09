@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -28,6 +29,8 @@ API_URL = os.environ.get(
 MODEL = os.environ.get("LLM_MODEL", "kimi-for-coding")
 API_KEY_VAR = "LLM_API_KEY"
 TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "300"))
+MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "3"))
+RETRY_BASE_DELAY = 10  # seconds
 
 _SHARED_RULES = (
     "- Preserve markdown structure exactly: headings, links, tables, inline code, image paths\n"
@@ -283,14 +286,41 @@ def _request_translation(
         method="POST",
     )
 
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            body = resp.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"LLM API HTTP {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"LLM API request failed: {exc}") from exc
+    last_exc: Exception | None = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+                body = resp.read().decode("utf-8")
+            break
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            # Don't retry client errors (4xx)
+            if 400 <= exc.code < 500:
+                raise RuntimeError(f"LLM API HTTP {exc.code}: {detail}") from exc
+            last_exc = RuntimeError(f"LLM API HTTP {exc.code}: {detail}")
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+            last_exc = RuntimeError(f"LLM API request failed: {exc}")
+
+        if attempt < MAX_RETRIES:
+            delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
+            print(
+                f"  Attempt {attempt}/{MAX_RETRIES} failed, retrying in {delay}s...",
+                file=sys.stderr,
+            )
+            # Rebuild request — urllib consumes the body on first send
+            req = urllib.request.Request(
+                API_URL,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "claude-code/2.1.71",
+                },
+                method="POST",
+            )
+            time.sleep(delay)
+    else:
+        raise last_exc  # type: ignore[misc]
 
     parsed = json.loads(body)
     choices = parsed.get("choices")
