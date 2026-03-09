@@ -70,7 +70,10 @@ def _request_translation(source_markdown: str, api_key: str) -> str:
         "- Use 你 not 您\n"
         "- Omit unnecessary 的、了、一个、进行 — keep sentences tight\n"
         "- Preserve markdown structure exactly: headings, links, tables, code fences, inline code, image paths\n"
-        "- Do not translate URLs, package names, commands, code blocks, file paths, env vars, or link anchors\n"
+        "- Do not translate URLs, package names, commands, code blocks, file paths, env vars\n"
+        "- CRITICAL: Table of Contents anchors MUST match the translated heading text. "
+        "GitHub generates anchors from heading text, so if you translate '## Prerequisites' to '## 前置要求', "
+        "the TOC link must be [前置要求](#前置要求), NOT [前置要求](#prerequisites).\n"
         "- Keep line breaks and section order identical\n"
         "- Return only the translated markdown, no explanation\n\n"
         + glossary
