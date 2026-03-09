@@ -26,13 +26,54 @@ def _strip_markdown_fence(text: str) -> str:
 
 
 def _request_translation(source_markdown: str, api_key: str) -> str:
+    glossary = (
+        "Mandatory glossary — use these translations exactly:\n"
+        "- channel plugin → 频道插件\n"
+        "- channel → 频道 (when referring to messaging channels)\n"
+        "- group channel → 群组频道\n"
+        "- group policy → 群组策略\n"
+        "- DM → 私信\n"
+        "- access control → 访问控制\n"
+        "- allowlist → 白名单\n"
+        "- mention gating → @mention 门控\n"
+        "- pairing → 配对\n"
+        "- node → 节点\n"
+        "- gateway → 网关\n"
+        "- mesh network → mesh 网络\n"
+        "- transport → 传输方式\n"
+        "- repository → 仓库\n"
+        "- pull request → Pull Request (keep English)\n"
+        "- issue → issue (keep English)\n"
+        "- broker → broker (keep English, MQTT term)\n"
+        "- Serial → Serial (keep English in transport context)\n"
+        "- AI Agent → AI Agent (keep English)\n"
+        "- MeshClaw → MeshClaw (keep English)\n"
+        "- OpenClaw → OpenClaw (keep English)\n"
+        "- Meshtastic → Meshtastic (keep English)\n"
+        "- LoRa → LoRa (keep English)\n"
+    )
+
     system_prompt = (
-        "You are a professional technical translator for open-source projects. "
-        "Translate English README markdown to Simplified Chinese. "
-        "Preserve markdown structure exactly: headings, links, tables, code fences, inline code, and image paths. "
-        "Do not translate URLs, package names, commands, code blocks, file paths, environment variables, or anchors in markdown links. "
-        "Keep line breaks and section order as close as possible. "
-        "Return only translated markdown content."
+        "You are a native Simplified Chinese technical writer translating an open-source README. "
+        "Write like a Chinese developer writing docs for other Chinese developers — concise, direct, natural. "
+        "DO NOT produce literal/mechanical translation. Rephrase for natural Chinese reading flow. "
+        "Examples of BAD vs GOOD translations:\n"
+        "  BAD:  此存储库是一个 OpenClaw 通道插件，不是一个独立的应用程序。\n"
+        "  GOOD: 这是 OpenClaw 的频道插件，不是独立应用。\n"
+        "  BAD:  您需要一个正在运行的 OpenClaw 网关（Node.js 22+）才能使用它。\n"
+        "  GOOD: 需要先安装并运行 OpenClaw 网关（Node.js 22+）。\n"
+        "  BAD:  在提交问题时要包括传输模式、编辑后的配置。\n"
+        "  GOOD: 提 issue 时请附上传输方式、配置（隐去密钥）。\n"
+        "  BAD:  欢迎拉取请求\n"
+        "  GOOD: 欢迎提交 Pull Request\n"
+        "Rules:\n"
+        "- Use 你 not 您\n"
+        "- Omit unnecessary 的、了、一个、进行 — keep sentences tight\n"
+        "- Preserve markdown structure exactly: headings, links, tables, code fences, inline code, image paths\n"
+        "- Do not translate URLs, package names, commands, code blocks, file paths, env vars, or link anchors\n"
+        "- Keep line breaks and section order identical\n"
+        "- Return only the translated markdown, no explanation\n\n"
+        + glossary
     )
 
     payload = {
