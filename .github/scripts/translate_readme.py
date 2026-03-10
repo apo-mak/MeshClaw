@@ -8,9 +8,11 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,12 +26,13 @@ PROMPTS_DIR = TRANSLATE_DIR / "prompts"
 DO_NOT_TRANSLATE_FILE = TRANSLATE_DIR / "do-not-translate.md"
 
 API_URL = os.environ.get(
-    "LLM_BASE_URL", "https://api.kimi.com/coding/v1/chat/completions"
+    "LLM_BASE_URL", "https://api.apimart.ai/v1/chat/completions"
 )
-MODEL = os.environ.get("LLM_MODEL", "kimi-for-coding")
+MODEL = os.environ.get("LLM_MODEL", "gpt-5")
 API_KEY_VAR = "LLM_API_KEY"
 TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "600"))
 MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "3"))
+MAX_CONCURRENCY = int(os.environ.get("LLM_MAX_CONCURRENCY", "2"))
 RETRY_BASE_DELAY = 15  # seconds
 
 _SHARED_RULES = (
@@ -60,6 +63,10 @@ class LangConfig:
     glossary: str
     style_prompt: str
 
+
+# ---------------------------------------------------------------------------
+# Language config loading
+# ---------------------------------------------------------------------------
 
 def _strip_markdown_fence(text: str) -> str:
     stripped = text.strip()
@@ -117,6 +124,10 @@ def _load_languages() -> list[LangConfig]:
     return languages
 
 
+# ---------------------------------------------------------------------------
+# Language switcher
+# ---------------------------------------------------------------------------
+
 def _build_lang_switcher(current_file: str, languages: list[LangConfig]) -> str:
     links: list[str] = []
 
@@ -155,6 +166,10 @@ def _fix_lang_switcher(
         return translated
     return result
 
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
 
 def _extract_code_blocks(md: str) -> list[str]:
     return re.findall(r"^```[^\n]*\n[\s\S]*?^```", md, re.MULTILINE)
@@ -247,8 +262,36 @@ def _validate_translation(
     return errors
 
 
+# ---------------------------------------------------------------------------
+# LLM API — dual-mode request (non-streaming primary, streaming fallback)
+# ---------------------------------------------------------------------------
+
+def _make_request(payload: dict, api_key: str) -> urllib.request.Request:
+    return urllib.request.Request(
+        API_URL,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": os.environ.get("LLM_USER_AGENT", "readme-translator/1.0"),
+        },
+        method="POST",
+    )
+
+
+def _non_stream_response(req: urllib.request.Request) -> str:
+    """Standard synchronous request — preferred for batch workloads."""
+    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        body = json.loads(resp.read().decode("utf-8"))
+    return (
+        body.get("choices", [{}])[0]
+        .get("message", {})
+        .get("content", "")
+    )
+
+
 def _stream_response(req: urllib.request.Request) -> str:
-    """Send request with stream=true and assemble SSE chunks into full content."""
+    """SSE streaming fallback — used only when non-streaming returns empty."""
     chunks: list[str] = []
     with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
         for raw_line in resp:
@@ -274,6 +317,69 @@ def _stream_response(req: urllib.request.Request) -> str:
     return "".join(chunks)
 
 
+def _call_llm_with_retry(
+    messages: list[dict],
+    api_key: str,
+    lang_code: str,
+) -> str:
+    """Call LLM with retry logic. Non-streaming first, streaming fallback."""
+    strategies = [
+        ("non-streaming", False, _non_stream_response),
+        ("streaming", True, _stream_response),
+    ]
+
+    for strategy_name, use_stream, response_fn in strategies:
+        payload = {
+            "model": MODEL,
+            "temperature": 0.2,
+            "stream": use_stream,
+            "messages": messages,
+        }
+
+        last_exc: Exception | None = None
+        for attempt in range(1, MAX_RETRIES + 1):
+            req = _make_request(payload, api_key)
+            try:
+                content = response_fn(req)
+                if content:
+                    return content
+                # Empty response — no point retrying same strategy
+                print(
+                    f"  [{lang_code}] {strategy_name} returned empty content",
+                    file=sys.stderr,
+                )
+                break
+            except urllib.error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                if 400 <= exc.code < 500 and exc.code != 429:
+                    raise RuntimeError(f"LLM API HTTP {exc.code}: {detail}") from exc
+                last_exc = RuntimeError(f"LLM API HTTP {exc.code}: {detail}")
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
+                last_exc = RuntimeError(f"LLM API request failed: {exc}")
+
+            if attempt < MAX_RETRIES:
+                delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                print(
+                    f"  [{lang_code}] {strategy_name} attempt {attempt}/{MAX_RETRIES} failed, "
+                    f"retrying in {delay}s...",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+            elif last_exc:
+                print(
+                    f"  [{lang_code}] {strategy_name} exhausted {MAX_RETRIES} retries",
+                    file=sys.stderr,
+                )
+
+    raise RuntimeError(
+        f"All strategies exhausted for {lang_code} — both non-streaming and streaming returned no content"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Translation pipeline
+# ---------------------------------------------------------------------------
+
 def _request_translation(
     source_markdown: str,
     api_key: str,
@@ -289,57 +395,16 @@ def _request_translation(
         + do_not_translate
     )
 
-    payload = {
-        "model": MODEL,
-        "temperature": 0.2,
-        "stream": True,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": f"Translate the following README markdown to {lang.name}:\n\n"
-                + source_markdown,
-            },
-        ],
-    }
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": f"Translate the following README markdown to {lang.name}:\n\n"
+            + source_markdown,
+        },
+    ]
 
-    last_exc: Exception | None = None
-    for attempt in range(1, MAX_RETRIES + 1):
-        req = urllib.request.Request(
-            API_URL,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "User-Agent": "claude-code/2.1.71",
-            },
-            method="POST",
-        )
-        try:
-            content = _stream_response(req)
-            break
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            # Don't retry client errors (4xx), except 429 (rate limit)
-            if 400 <= exc.code < 500 and exc.code != 429:
-                raise RuntimeError(f"LLM API HTTP {exc.code}: {detail}") from exc
-            last_exc = RuntimeError(f"LLM API HTTP {exc.code}: {detail}")
-        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
-            last_exc = RuntimeError(f"LLM API request failed: {exc}")
-
-        if attempt < MAX_RETRIES:
-            delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
-            print(
-                f"  Attempt {attempt}/{MAX_RETRIES} failed, retrying in {delay}s...",
-                file=sys.stderr,
-            )
-            time.sleep(delay)
-    else:
-        raise last_exc  # type: ignore[misc]
-
-    if not content:
-        raise RuntimeError("LLM API returned empty content via streaming")
-
+    content = _call_llm_with_retry(messages, api_key, lang.code)
     return _strip_markdown_fence(content)
 
 
@@ -349,27 +414,34 @@ def _translate_one(
     lang: LangConfig,
     do_not_translate: str,
     languages: list[LangConfig],
-) -> int:
-    target = ROOT / lang.target_file
-    translated = _request_translation(source_markdown, api_key, lang, do_not_translate)
+    semaphore: threading.Semaphore | None = None,
+) -> None:
+    if semaphore:
+        semaphore.acquire()
+    try:
+        target = ROOT / lang.target_file
+        translated = _request_translation(source_markdown, api_key, lang, do_not_translate)
+        translated = _fix_lang_switcher(translated, lang.target_file, languages)
 
-    translated = _fix_lang_switcher(translated, lang.target_file, languages)
+        errors = _validate_translation(source_markdown, translated, lang)
+        if errors:
+            print(f"Translation validation warnings ({lang.code}):", file=sys.stderr)
+            for err in errors:
+                print(f"  - {err}", file=sys.stderr)
 
-    errors = _validate_translation(source_markdown, translated, lang)
-    if errors:
-        print(f"Translation validation warnings ({lang.code}):", file=sys.stderr)
-        for err in errors:
-            print(f"  - {err}", file=sys.stderr)
+        target.write_text(translated, encoding="utf-8")
 
-    target.write_text(translated, encoding="utf-8")
+        print(f"Translated {SOURCE.name} -> {lang.target_file} ({lang.name})")
+        if errors:
+            print(f"  ({len(errors)} validation warning(s) — see stderr)")
+    finally:
+        if semaphore:
+            semaphore.release()
 
-    print(
-        f"Translated {SOURCE.name} -> {lang.target_file} ({lang.name}) using model {MODEL}."
-    )
-    if errors:
-        print(f"  ({len(errors)} validation warning(s) — see stderr)")
-    return 0
 
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -416,13 +488,13 @@ def main() -> int:
         if lang is None:
             allowed = ", ".join(sorted(lang_map.keys()))
             raise ValueError(f"Unsupported --lang '{args.lang}'. Allowed: {allowed}")
-        return _translate_one(
+        _translate_one(
             source_markdown, api_key, lang, do_not_translate, languages
         )
+        return 0
 
-    # --all mode: translate all languages in parallel
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
+    # --all mode: controlled concurrency via semaphore
+    semaphore = threading.Semaphore(MAX_CONCURRENCY)
     failed: list[str] = []
     succeeded: list[str] = []
 
@@ -435,6 +507,7 @@ def main() -> int:
                 lang,
                 do_not_translate,
                 languages,
+                semaphore,
             ): lang
             for lang in languages
         }
@@ -454,8 +527,8 @@ def main() -> int:
         print(f"Succeeded: {', '.join(sorted(succeeded))}")
     if failed:
         print(f"Failed: {', '.join(sorted(failed))}", file=sys.stderr)
-        return 1
-    return 0
+    # Exit 0 if any succeeded — partial success is still success
+    return 0 if succeeded else 1
 
 
 if __name__ == "__main__":

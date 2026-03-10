@@ -15,8 +15,8 @@ permissions:
 
 env:
   LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-  LLM_BASE_URL: ${{ vars.LLM_BASE_URL || 'https://api.kimi.com/coding/v1/chat/completions' }}
-  LLM_MODEL: ${{ vars.LLM_MODEL || 'kimi-for-coding' }}
+  LLM_BASE_URL: ${{ vars.LLM_BASE_URL || 'https://api.apimart.ai/v1/chat/completions' }}
+  LLM_MODEL: ${{ vars.LLM_MODEL || 'gpt-5' }}
   LLM_TIMEOUT: ${{ vars.LLM_TIMEOUT || '300' }}
 
 jobs:
@@ -97,7 +97,14 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "docs: auto-translate README files from README.md"
-          git push
+          # Retry push with rebase to handle concurrent commits
+          for i in 1 2 3; do
+            git push && exit 0
+            echo "Push failed (attempt $i/3), pulling with rebase..."
+            git pull --rebase
+          done
+          echo "Push failed after 3 attempts"
+          exit 1
 
       - name: Report result
         if: always() && steps.check.outputs.changed == 'true'
@@ -149,4 +156,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "docs: auto-translate README files from README.md"
-          git push
+          # Retry push with rebase to handle concurrent commits
+          for i in 1 2 3; do
+            git push && exit 0
+            echo "Push failed (attempt $i/3), pulling with rebase..."
+            git pull --rebase
+          done
+          echo "Push failed after 3 attempts"
+          exit 1
