@@ -79,22 +79,7 @@ jobs:
 
       - name: Translate to all languages
         if: steps.check.outputs.changed == 'true'
-        run: |
-          LANGS=$(python3 -c "import json; print(' '.join(l['code'] for l in json.load(open('.github/translate/languages.json'))))")
-          FAILED=""
-          for lang in $LANGS; do
-            echo "::group::Translating to ${lang}"
-            if python .github/scripts/translate_readme.py --lang "${lang}"; then
-              echo "✓ ${lang} succeeded"
-            else
-              echo "✗ ${lang} failed"
-              FAILED="${FAILED} ${lang}"
-            fi
-            echo "::endgroup::"
-          done
-          if [ -n "$FAILED" ]; then
-            echo "::warning::Failed languages:${FAILED}"
-          fi
+        run: python .github/scripts/translate_readme.py --all
 
       - name: Commit and push translated READMEs
         if: steps.check.outputs.changed == 'true'
@@ -146,22 +131,7 @@ jobs:
           python-version: "3.12"
 
       - name: Translate to all languages
-        run: |
-          LANGS=$(python3 -c "import json; print(' '.join(l['code'] for l in json.load(open('.github/translate/languages.json'))))")
-          FAILED=""
-          for lang in $LANGS; do
-            echo "::group::Translating to ${lang}"
-            if python .github/scripts/translate_readme.py --lang "${lang}"; then
-              echo "✓ ${lang} succeeded"
-            else
-              echo "✗ ${lang} failed"
-              FAILED="${FAILED} ${lang}"
-            fi
-            echo "::endgroup::"
-          done
-          if [ -n "$FAILED" ]; then
-            echo "::warning::Failed languages:${FAILED}"
-          fi
+        run: python .github/scripts/translate_readme.py --all
 
       - name: Commit translated READMEs if changed
         run: |

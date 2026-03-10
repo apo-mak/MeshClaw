@@ -294,8 +294,8 @@ def _request_translation(
             break
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            # Don't retry client errors (4xx)
-            if 400 <= exc.code < 500:
+            # Don't retry client errors (4xx), except 429 (rate limit)
+            if 400 <= exc.code < 500 and exc.code != 429:
                 raise RuntimeError(f"LLM API HTTP {exc.code}: {detail}") from exc
             last_exc = RuntimeError(f"LLM API HTTP {exc.code}: {detail}")
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as exc:
@@ -411,14 +411,42 @@ def main() -> int:
             source_markdown, api_key, lang, do_not_translate, languages
         )
 
-    status = 0
-    for lang in languages:
-        try:
-            _translate_one(source_markdown, api_key, lang, do_not_translate, languages)
-        except Exception as exc:
-            status = 1
-            print(f"Translation failed for {lang.code}: {exc}", file=sys.stderr)
-    return status
+    # --all mode: translate all languages in parallel
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    failed: list[str] = []
+    succeeded: list[str] = []
+
+    with ThreadPoolExecutor(max_workers=len(languages)) as pool:
+        futures = {
+            pool.submit(
+                _translate_one,
+                source_markdown,
+                api_key,
+                lang,
+                do_not_translate,
+                languages,
+            ): lang
+            for lang in languages
+        }
+        for future in as_completed(futures):
+            lang = futures[future]
+            try:
+                future.result()
+                succeeded.append(lang.code)
+            except Exception as exc:
+                failed.append(lang.code)
+                print(
+                    f"Translation failed for {lang.code}: {exc}",
+                    file=sys.stderr,
+                )
+
+    if succeeded:
+        print(f"Succeeded: {', '.join(sorted(succeeded))}")
+    if failed:
+        print(f"Failed: {', '.join(sorted(failed))}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
