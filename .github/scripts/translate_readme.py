@@ -168,6 +168,95 @@ def _fix_lang_switcher(
 
 
 # ---------------------------------------------------------------------------
+# Post-processing — fix common LLM translation mistakes programmatically
+# ---------------------------------------------------------------------------
+
+def _strip_preamble(translated: str) -> str:
+    """Remove any content before the first markdown heading.
+
+    Handles LLM reasoning artifacts (<think>...</think> blocks),
+    markdown fences, and other preamble text.
+    """
+    # Strip <think>...</think> reasoning blocks (e.g. from GPT-5, DeepSeek)
+    translated = re.sub(r"<think>[\s\S]*?</think>\s*", "", translated)
+    match = re.search(r"^(#[# ]*\s)", translated, re.MULTILINE)
+    if match and match.start() > 0:
+        return translated[match.start():]
+    return translated
+
+
+def _restore_code_blocks(source: str, translated: str) -> str:
+    """Replace translated code blocks with original source code blocks."""
+    source_blocks = re.findall(r"^```[^\n]*\n[\s\S]*?^```", source, re.MULTILINE)
+    translated_blocks = re.findall(r"^```[^\n]*\n[\s\S]*?^```", translated, re.MULTILINE)
+    if len(source_blocks) != len(translated_blocks):
+        return translated
+    for src_block, trans_block in zip(source_blocks, translated_blocks):
+        if src_block != trans_block:
+            translated = translated.replace(trans_block, src_block, 1)
+    return translated
+
+
+def _fix_toc_anchors(translated: str, toc_heading_pattern: str) -> str:
+    """Rewrite TOC link anchors to match the actual translated heading anchors."""
+    headings = re.findall(r"^(#{2,})\s+(.+)$", translated, re.MULTILINE)
+    if not headings:
+        return translated
+
+    # Build ordered list of anchors from actual headings
+    heading_anchors: list[str] = []
+    for _, text in headings:
+        anchor = text.strip().lower()
+        anchor = re.sub(r"[^\w\s\u3000-\u9fff\uac00-\ud7af-]", "", anchor)
+        anchor = re.sub(r"\s+", "-", anchor)
+        heading_anchors.append(anchor)
+
+    # Find TOC section
+    toc_match = re.search(
+        rf"^##\s+.*(?:{toc_heading_pattern}).*\n([\s\S]*?)(?=\n##\s)",
+        translated,
+        re.MULTILINE,
+    )
+    if not toc_match:
+        return translated
+
+    toc_section = toc_match.group(0)
+    toc_links = re.findall(r"\[([^\]]*)\]\(#[^)]*\)", toc_section)
+
+    if not toc_links:
+        return translated
+
+    # Find the TOC heading index
+    toc_heading_idx = None
+    for i, (_, text) in enumerate(headings):
+        if re.search(toc_heading_pattern, text):
+            toc_heading_idx = i
+            break
+
+    if toc_heading_idx is None:
+        return translated
+
+    # Content headings are those after the TOC heading
+    content_anchors = heading_anchors[toc_heading_idx + 1:]
+
+    # Replace each TOC link anchor with the correct one
+    new_toc = toc_section
+    toc_link_pattern = re.finditer(r"\[([^\]]*)\]\(#([^)]*)\)", toc_section)
+    replacements: list[tuple[str, str]] = []
+    for i, m in enumerate(toc_link_pattern):
+        if i < len(content_anchors):
+            old = m.group(0)
+            new = f"[{m.group(1)}](#{content_anchors[i]})"
+            if old != new:
+                replacements.append((old, new))
+
+    for old, new in replacements:
+        new_toc = new_toc.replace(old, new, 1)
+
+    return translated.replace(toc_section, new_toc, 1)
+
+
+# ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
 
@@ -421,6 +510,11 @@ def _translate_one(
     try:
         target = ROOT / lang.target_file
         translated = _request_translation(source_markdown, api_key, lang, do_not_translate)
+
+        # Post-processing: fix common LLM mistakes programmatically
+        translated = _strip_preamble(translated)
+        translated = _restore_code_blocks(source_markdown, translated)
+        translated = _fix_toc_anchors(translated, lang.toc_heading_pattern)
         translated = _fix_lang_switcher(translated, lang.target_file, languages)
 
         errors = _validate_translation(source_markdown, translated, lang)
