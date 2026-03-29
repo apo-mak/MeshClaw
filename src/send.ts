@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { stripMarkdown } from "openclaw/plugin-sdk";
+import { stripMarkdown } from "openclaw/plugin-sdk/text-runtime";
 
 import { resolveMeshtasticAccount } from "./accounts.js";
 import { hexToNodeNum, normalizeMeshtasticMessagingTarget } from "./normalize.js";

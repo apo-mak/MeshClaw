@@ -11,6 +11,9 @@
   <a href="https://www.npmjs.com/package/@seeed-studio/meshtastic">
     <img alt="license" src="https://img.shields.io/npm/l/@seeed-studio/meshtastic.svg" />
   </a>
+  <a href="https://github.com/openclaw/openclaw">
+    <img alt="openclaw compat" src="https://img.shields.io/badge/OpenClaw-2026.3.x-blue" />
+  </a>
 </p>
 
 <!-- LANG_SWITCHER_START -->

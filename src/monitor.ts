@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { createLoggerBackedRuntime, type RuntimeEnv } from "openclaw/plugin-sdk";
+import { createLoggerBackedRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/irc";
 import { resolveMeshtasticAccount } from "./accounts.js";
 import { connectMeshtasticClient, DeviceStatus, SetOwnerRebootError, type MeshtasticClient } from "./client.js";
 import { handleMeshtasticInbound } from "./inbound.js";

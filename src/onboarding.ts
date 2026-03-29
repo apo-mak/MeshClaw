@@ -3,13 +3,17 @@ import {
   addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
-  promptAccountId,
-  promptChannelAccessConfig,
-  type ChannelOnboardingAdapter,
-  type ChannelOnboardingDmPolicy,
   type DmPolicy,
   type WizardPrompter,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/irc";
+import {
+  promptAccountId,
+  promptChannelAccessConfig,
+} from "openclaw/plugin-sdk/matrix";
+import type {
+  ChannelSetupAdapter as ChannelOnboardingAdapter,
+  ChannelSetupDmPolicy as ChannelOnboardingDmPolicy,
+} from "openclaw/plugin-sdk/setup";
 import {
   listMeshtasticAccountIds,
   resolveDefaultMeshtasticAccountId,
